@@ -43,7 +43,6 @@ class CenterSerializer(serializers.ModelSerializer):
     )
 
     members = MemberSerializer(
-        source="member_set",
         many = True,
         read_only = True
     )

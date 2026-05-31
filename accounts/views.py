@@ -4,7 +4,7 @@ from rest_framework import status
 from django.contrib.auth import authenticate
 
 from rest_framework_simplejwt.tokens import RefreshToken
-from .serializers import RegisterSerializer, TrainerListSerializer, AssignTrainerCenterSerializer
+from .serializers import RegisterSerializer, TrainerListSerializer, AssignTrainerCenterSerializer, TrainerUpdateSerializer
 
 from .models import User
 
@@ -76,60 +76,74 @@ class LoginView(APIView):
         })
     
 class AssignTrainerCenterView(APIView):
-
-    permission_classes = [
-        IsAuthenticated,
-        IsAdminUserRole
-    ]
+    permission_classes = [IsAuthenticated, IsAdminUserRole]
 
     def post(self, request):
+        serializer = AssignTrainerCenterSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = AssignTrainerCenterSerializer(
-            data=request.data
-        )
+        trainer_id = serializer.validated_data["trainer_id"]
+        center_ids = serializer.validated_data["center_id"]  # list, can be []
 
-        if serializer.is_valid():
+        try:
+            trainer = User.objects.get(id=trainer_id, role="TRAINER")
+        except User.DoesNotExist:
+            return Response({"error": "Trainer not found"}, status=status.HTTP_404_NOT_FOUND)
 
-            trainer_id = serializer.validated_data["trainer_id"]
+        # if centers list is empty => unassign from all
+        if not center_ids:
+            trainer.centers.clear()
+            return Response({"message": "Trainer unassigned from all centers"}, status=status.HTTP_200_OK)
 
-            center_id = serializer.validated_data["center_id"]
+        centers = Center.objects.filter(id__in=center_ids)
 
-            try:
+        # validate all centers exist
+        found_ids = set(centers.values_list("id", flat=True))
+        missing_ids = [cid for cid in center_ids if cid not in found_ids]
+        if missing_ids:
+            return Response(
+                {"error": "Center not found", "missing_center_ids": missing_ids},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-                trainer = User.objects.get(
-                    id=trainer_id,
-                    role="TRAINER"
-                )
+        # IMPORTANT: this replaces existing centers with the new list (removes the rest)
+        trainer.centers.set(centers)
 
-            except User.DoesNotExist:
+        return Response({"message": "Trainer centers updated successfully"}, status=status.HTTP_200_OK)
+class UnassignTrainerCenterView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUserRole]
 
-                return Response(
-                    {"error": "Trainer not found"},
-                    status=status.HTTP_404_NOT_FOUND
-                )
+    def post(self, request):
+        serializer = AssignTrainerCenterSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-            try:
+        trainer_id = serializer.validated_data["trainer_id"]
+        center_id = serializer.validated_data["center_id"]
 
-                center = Center.objects.get(id=center_id)
+        try:
+            trainer = User.objects.get(id=trainer_id, role="TRAINER")
+        except User.DoesNotExist:
+            return Response({"error": "Trainer not found"}, status=status.HTTP_404_NOT_FOUND)
 
-            except Center.DoesNotExist:
+        try:
+            center = Center.objects.get(id=center_id)
+        except Center.DoesNotExist:
+            return Response({"error": "Center not found"}, status=status.HTTP_404_NOT_FOUND)
 
-                return Response(
-                    {"error": "Center not found"},
-                    status=status.HTTP_404_NOT_FOUND
-                )
+        # send 404 if trainer is NOT assigned to this center
+        if not trainer.centers.filter(id=center.id).exists():
+            return Response(
+                {"error": "Trainer is not assigned to this center"},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-            trainer.centers.add(center)
+        trainer.centers.remove(center)
 
-            return Response({
-                "message": "Center assigned successfully"
-            })
-
-        return Response(
-            serializer.errors,
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({"message": "Center unassigned successfully"}, status=status.HTTP_200_OK)
     
+
 class TrainerListView(APIView):
 
     permission_classes = [
@@ -149,3 +163,42 @@ class TrainerListView(APIView):
         )
 
         return Response(serializer.data)
+
+class TrainerDetailView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUserRole]  # ADMIN only
+
+    def get_object(self, id):
+        try:
+            return User.objects.prefetch_related("centers").get(id=id, role="TRAINER")
+        except User.DoesNotExist:
+            return None
+
+    def get(self, request, id):
+        trainer = self.get_object(id)
+        if trainer is None:
+            return Response({"error": "Trainer not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(TrainerListSerializer(trainer).data, status=status.HTTP_200_OK)
+
+    def patch(self, request, id):
+        trainer = self.get_object(id)
+        if trainer is None:
+            return Response({"error": "Trainer not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = TrainerUpdateSerializer(trainer, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+
+        # return updated trainer profile (including centers)
+        trainer.refresh_from_db()
+        return Response(TrainerListSerializer(trainer).data, status=status.HTTP_200_OK)
+
+    def delete(self, request, id):
+        trainer = self.get_object(id)
+        if trainer is None:
+            return Response({"error": "Trainer not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        trainer.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

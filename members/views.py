@@ -7,7 +7,8 @@ from .models import Member
 from .serializers import MemberSerializer
 
 from centers.models import Center
-
+from .serializers import AssignMemberCenterSerializer
+from accounts.permissions import IsAdminUserRole
 
 class MemberListCreateView(APIView):
 
@@ -115,41 +116,27 @@ class MemberDetailView(APIView):
 
         return Response(serializer.data)
 
-    def put(self, request, pk):
-
+    def patch(self, request, pk):
         member = self.get_object(pk)
 
         if not member:
-
-            return Response(
-                {"error": "Member not found"},
-                status=status.HTTP_404_NOT_FOUND
-            )
+            return Response({"error": "Member not found"}, status=status.HTTP_404_NOT_FOUND)
 
         if request.user.role == "TRAINER":
-
             if member.center not in request.user.centers.all():
-
-                return Response(
-                    {"error": "Access denied"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+                return Response({"error": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
 
         serializer = MemberSerializer(
             member,
-            data=request.data
+            data=request.data,
+            partial=True,
         )
 
         if serializer.is_valid():
-
             serializer.save()
-
             return Response(serializer.data)
 
-        return Response(
-            serializer.errors,
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
 
@@ -175,3 +162,45 @@ class MemberDetailView(APIView):
             {"message": "Member deleted successfully"},
             status=status.HTTP_204_NO_CONTENT
         )
+    
+class AssignMemberCenterView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUserRole]
+
+    def post(self, request):
+        serializer = AssignMemberCenterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        member_id = serializer.validated_data["member_id"]
+        center_id = serializer.validated_data.get("center_id")  # can be missing or None
+
+        try:
+            member = Member.objects.get(id=member_id)
+        except Member.DoesNotExist:
+            return Response({"error": "Member not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # If null (or missing), unassign center
+        if center_id is None:
+            # Optional: you may still want role checks here depending on your rules
+            member.center = None
+            member.save(update_fields=["center", "updated_at"])
+            return Response({"message": "Member unassigned from center successfully"}, status=status.HTTP_200_OK)
+
+        try:
+            center = Center.objects.get(id=center_id)
+        except Center.DoesNotExist:
+            return Response({"error": "Center not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Permission rules
+        if request.user.role == "TRAINER":
+            if center not in request.user.centers.all():
+                return Response(
+                    {"error": "You cannot assign members to this center"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        elif request.user.role != "ADMIN":
+            return Response({"error": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
+
+        member.center = center
+        member.save(update_fields=["center", "updated_at"])
+
+        return Response({"message": "Member assigned to center successfully"}, status=status.HTTP_200_OK)
