@@ -28,10 +28,12 @@ class RegisterSerializer(serializers.ModelSerializer):
         return user
     
 class AssignTrainerCenterSerializer(serializers.Serializer):
-
     trainer_id = serializers.IntegerField()
-
-    center_id = serializers.IntegerField()
+    center_id = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=True,
+        required=True
+    )
 
 class TrainerListSerializer(serializers.ModelSerializer):
 
@@ -85,3 +87,14 @@ class TrainerListSerializer(serializers.ModelSerializer):
             "role",
             "centers",
         ]
+
+class TrainerUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["username", "email", "first_name", "last_name"] 
+        extra_kwargs = {
+            "username": {"required": False},
+            "email": {"required": False},
+            "first_name": {"required": False},
+            "last_name": {"required": False},
+        }

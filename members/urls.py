@@ -2,7 +2,8 @@ from django.urls import path
 
 from .views import (
     MemberListCreateView,
-    MemberDetailView
+    MemberDetailView,
+    AssignMemberCenterView
 )
 
 urlpatterns = [
@@ -16,4 +17,5 @@ urlpatterns = [
         "<int:pk>/",
         MemberDetailView.as_view()
     ),
+    path("assign-member-center/", AssignMemberCenterView.as_view()),
 ]
